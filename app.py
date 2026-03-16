@@ -7,7 +7,6 @@ import plotly.graph_objects as go
 from data_loader import (
     load_chiller_freezer_data,
     load_hygiene_data,
-    load_receiving_log_data,
     load_manager_checklists,
 )
 from dashboards.chiller_freezer import render_chiller_freezer
@@ -117,13 +116,12 @@ def render_page_header(title: str, subtitle: str, icon: str):
 
 
 @st.cache_data(show_spinner=False)
-def load_all_data(chiller_file, hygiene_file, receiving_file, m_open, m_mid, m_close, _version=3):
-    """Load and process all datasets. Increment _version to bust stale cache."""
+def load_all_data(chiller_file, hygiene_file, m_open, m_mid, m_close, _version=4):
+    """Load and process datasets. Increment _version to bust stale cache."""
     chiller_df   = load_chiller_freezer_data(chiller_file)
     hygiene_df   = load_hygiene_data(hygiene_file)
-    receiving_df = load_receiving_log_data(receiving_file)
     manager_df   = load_manager_checklists(m_open, m_mid, m_close)
-    return chiller_df, hygiene_df, receiving_df, manager_df
+    return chiller_df, hygiene_df, manager_df
 
 
 def main():
@@ -145,7 +143,7 @@ def main():
     st.sidebar.markdown('<div style="font-size:0.75rem; font-weight:700; color:#64748b; text-transform:uppercase; letter-spacing:0.08em; margin-bottom:6px;">📊 Dashboards</div>', unsafe_allow_html=True)
     page = st.sidebar.radio(
         "nav",
-        ["🧊  Chiller & Freezer Log", "🧼  Hygiene & Replenishment", "📋  Manager Checklists"],
+        ["🧊  Chiller & Freezer Log", "🧼  Chef Hygiene Checklists", "📋  Manager Checklists"],
         label_visibility="collapsed"
     )
 
@@ -156,12 +154,10 @@ def main():
         st.caption("Upload to override default source data.")
         up_chiller = st.file_uploader("Chiller & Freezer CSV", type=["csv"], key="uc")
         up_hygiene = st.file_uploader("Hygiene Checklist CSV", type=["csv"], key="uh")
-        up_receive = st.file_uploader("Receiving Log CSV",     type=["csv"], key="ur")
 
     # ── File paths (defaults) ────────────────────────────────────────────
     chiller_path   = up_chiller if up_chiller else r"c:\Users\Harshit Rajput\Downloads\Herfy V\Chiller & Freez_01February2026_31March2026.csv"
     hygiene_path   = up_hygiene if up_hygiene else r"c:\Users\Harshit Rajput\Downloads\Personal Hygiene Checklist.csv"
-    receiving_path = up_receive if up_receive else r"c:\Users\Harshit Rajput\Downloads\Receiving Log Sheet.csv"
     op_path  = r"c:\Users\Harshit Rajput\Downloads\MANAGER OPENING CHECK - KITCHEN (Before The Biefing) (7).csv"
     mid_path = r"c:\Users\Harshit Rajput\Downloads\MANAGER MID-SHIFT CHECK - KITCHEN (during employee changeover).csv"
     cl_path  = r"c:\Users\Harshit Rajput\Downloads\MANAGER CLOSING CHECK - KITCHEN.csv"
@@ -169,8 +165,8 @@ def main():
     # ── Load data ────────────────────────────────────────────────────────
     with st.spinner("Loading data..."):
         try:
-            chiller_df, hygiene_df, receiving_df, manager_df = load_all_data(
-                chiller_path, hygiene_path, receiving_path, op_path, mid_path, cl_path
+            chiller_df, hygiene_df, manager_df = load_all_data(
+                chiller_path, hygiene_path, op_path, mid_path, cl_path
             )
         except Exception as e:
             st.error(f"Error loading data: {e}")
@@ -213,11 +209,11 @@ def main():
 
     elif "Hygiene" in page:
         render_page_header(
-            "Hygiene & Supplier Replenishment",
-            "Supplier delivery compliance and chef hygiene check analysis",
+            "Chef Hygiene Checklists",
+            "Personal hygiene checks and compliance tracking by staff member",
             "🧼"
         )
-        render_hygiene_receiving(hygiene_df, receiving_df, global_start_datetime, global_end_datetime)
+        render_hygiene_receiving(hygiene_df, global_start_datetime, global_end_datetime)
 
     elif "Manager" in page:
         render_page_header(
