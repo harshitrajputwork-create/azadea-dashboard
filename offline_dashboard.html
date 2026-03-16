@@ -1,0 +1,878 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Azadea Analytics</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@stlite/mountable@0.63.1/build/stlite.css" />
+</head>
+<body>
+    <div id="root"></div>
+    <script src="https://cdn.jsdelivr.net/npm/@stlite/mountable@0.63.1/build/stlite.js"></script>
+    <script>
+        stlite.mount(
+            {
+                requirements: ["pandas", "plotly"],
+                entrypoint: "app.py",
+                files: {
+                    "app.py": `import streamlit as st
+import pandas as pd
+import numpy as np
+import plotly.express as px
+import plotly.graph_objects as go
+
+from data_loader import (
+    load_chiller_freezer_data,
+    load_hygiene_data,
+    load_receiving_log_data,
+    load_manager_checklists,
+)
+from dashboards.chiller_freezer import render_chiller_freezer
+from dashboards.hygiene_receiving import render_hygiene_receiving
+from dashboards.manager_checklists import render_manager_checklists
+
+st.set_page_config(
+    page_title="Azadea Analytics Dashboard",
+    page_icon="🧊",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+# ─── Enterprise CSS ────────────────────────────────────────────────────────────
+st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+* { font-family: 'Inter', sans-serif !important; }
+
+/* ── Main content area ── */
+.stApp { background-color: #f0f2f6 !important; color: #1a1a2e !important; }
+
+/* ── Sidebar: force white bg + dark text ── */
+section[data-testid="stSidebar"] {
+    background-color: #ffffff !important;
+    border-right: 1px solid #dde1ea !important;
+    min-width: 240px !important;
+}
+section[data-testid="stSidebar"] * { color: #1a1a2e !important; }
+section[data-testid="stSidebar"] .stRadio label {
+    font-size: 0.92rem !important;
+    font-weight: 500 !important;
+    padding: 4px 0 !important;
+}
+
+/* ── All headings ── */
+h1, h2, h3, h4, h5, h6 { color: #1a1a2e !important; font-weight: 700 !important; }
+
+/* ── KPI Metric Cards with color-coded left borders ── */
+[data-testid="metric-container"] {
+    background: #ffffff !important;
+    border: 1px solid #e2e8f0 !important;
+    border-left: 5px solid #3b82f6 !important;
+    border-radius: 10px !important;
+    padding: 18px 20px !important;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.06) !important;
+}
+[data-testid="stMetricValue"] {
+    color: #1a1a2e !important;
+    font-size: 2rem !important;
+    font-weight: 800 !important;
+}
+[data-testid="stMetricLabel"] {
+    color: #64748b !important;
+    font-size: 0.72rem !important;
+    font-weight: 700 !important;
+    text-transform: uppercase !important;
+    letter-spacing: 0.06em !important;
+}
+
+/* ── Plotly charts get white card wrapper ── */
+.stPlotlyChart {
+    background: #ffffff !important;
+    border-radius: 10px !important;
+    padding: 8px !important;
+    border: 1px solid #e2e8f0 !important;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.05) !important;
+}
+
+/* ── Tabs ── */
+button[data-baseweb="tab"] { color: #374151 !important; font-weight: 600 !important; }
+button[data-baseweb="tab"][aria-selected="true"] { color: #1a1a2e !important; border-bottom-color: #3b82f6 !important; }
+
+/* ── Alerts & expanders ── */
+.stAlert { border-radius: 8px !important; }
+details summary { font-weight: 600 !important; color: #374151 !important; }
+
+/* ── Dataframe / table ── */
+.stDataFrame { border-radius: 8px !important; overflow: hidden !important; }
+
+/* ── Hide branding ── */
+#MainMenu { visibility: hidden; }
+footer { visibility: hidden; }
+header[data-testid="stHeader"] { background: transparent; }
+</style>
+""", unsafe_allow_html=True)
+
+
+def render_page_header(title: str, subtitle: str, icon: str):
+    """Dark navy enterprise-style header banner."""
+    st.markdown(f"""
+    <div style="background: linear-gradient(135deg, #1a1a2e 0%, #0f3460 100%);
+                color: white; padding: 22px 28px; border-radius: 12px;
+                margin-bottom: 24px; display: flex; align-items: center; gap: 16px;
+                box-shadow: 0 4px 16px rgba(15,52,96,0.25);">
+        <span style="font-size: 2.2rem; line-height:1;">{icon}</span>
+        <div>
+            <div style="font-size: 0.68rem; font-weight: 700; opacity: 0.6;
+                        letter-spacing: 0.14em; text-transform: uppercase; margin-bottom: 4px;">
+                AZADEA OPERATIONS DASHBOARD
+            </div>
+            <div style="font-size: 1.55rem; font-weight: 800; line-height: 1.2;">{title}</div>
+            <div style="font-size: 0.82rem; opacity: 0.7; margin-top: 4px;">{subtitle}</div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+
+@st.cache_data(show_spinner=False)
+def load_all_data(chiller_file, hygiene_file, receiving_file, m_open, m_mid, m_close, _version=3):
+    """Load and process all datasets. Increment _version to bust stale cache."""
+    chiller_df   = load_chiller_freezer_data(chiller_file)
+    hygiene_df   = load_hygiene_data(hygiene_file)
+    receiving_df = load_receiving_log_data(receiving_file)
+    manager_df   = load_manager_checklists(m_open, m_mid, m_close)
+    return chiller_df, hygiene_df, receiving_df, manager_df
+
+
+def main():
+    # ── Sidebar brand header ─────────────────────────────────────────────
+    st.sidebar.markdown("""
+    <div style="padding: 18px 12px 8px 12px;">
+        <div style="font-size: 0.65rem; font-weight: 700; color: #94a3b8;
+                    letter-spacing: 0.14em; text-transform: uppercase;">
+            Powered by Taqtics
+        </div>
+        <div style="font-size: 1.25rem; font-weight: 800; color: #1a1a2e; margin-top: 3px;">
+            Azadea Analytics
+        </div>
+    </div>
+    <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 6px 0 14px 0;">
+    """, unsafe_allow_html=True)
+
+    # ── Navigation ───────────────────────────────────────────────────────
+    st.sidebar.markdown('<div style="font-size:0.75rem; font-weight:700; color:#64748b; text-transform:uppercase; letter-spacing:0.08em; margin-bottom:6px;">📊 Dashboards</div>', unsafe_allow_html=True)
+    page = st.sidebar.radio(
+        "nav",
+        ["🧊  Chiller & Freezer Log", "🧼  Hygiene & Replenishment", "📋  Manager Checklists"],
+        label_visibility="collapsed"
+    )
+
+    # ── Upload CSV section ───────────────────────────────────────────────
+    st.sidebar.markdown('<hr style="border:none; border-top:1px solid #e2e8f0; margin:14px 0;">', unsafe_allow_html=True)
+    st.sidebar.markdown('<div style="font-size:0.75rem; font-weight:700; color:#64748b; text-transform:uppercase; letter-spacing:0.08em; margin-bottom:6px;">📁 Upload CSV Data</div>', unsafe_allow_html=True)
+    with st.sidebar.expander("Replace default files", expanded=False):
+        st.caption("Upload to override default source data.")
+        up_chiller = st.file_uploader("Chiller & Freezer CSV", type=["csv"], key="uc")
+        up_hygiene = st.file_uploader("Hygiene Checklist CSV", type=["csv"], key="uh")
+        up_receive = st.file_uploader("Receiving Log CSV",     type=["csv"], key="ur")
+
+    # ── File paths (defaults) ────────────────────────────────────────────
+    import os
+    chiller_path   = up_chiller if up_chiller else r"c:\\Users\\Harshit Rajput\\Downloads\\Herfy V\\Chiller & Freez_01February2026_31March2026.csv"
+    hygiene_path   = up_hygiene if up_hygiene else r"c:\\Users\\Harshit Rajput\\Downloads\\Personal Hygiene Checklist.csv"
+    receiving_path = up_receive if up_receive else r"c:\\Users\\Harshit Rajput\\Downloads\\Receiving Log Sheet.csv"
+    op_path  = r"c:\\Users\\Harshit Rajput\\Downloads\\MANAGER OPENING CHECK - KITCHEN (Before The Biefing) (7).csv"
+    mid_path = r"c:\\Users\\Harshit Rajput\\Downloads\\MANAGER MID-SHIFT CHECK - KITCHEN (during employee changeover).csv"
+    cl_path  = r"c:\\Users\\Harshit Rajput\\Downloads\\MANAGER CLOSING CHECK - KITCHEN.csv"
+
+    # ── Load data ────────────────────────────────────────────────────────
+    with st.spinner("Loading data..."):
+        try:
+            chiller_df, hygiene_df, receiving_df, manager_df = load_all_data(
+                chiller_path, hygiene_path, receiving_path, op_path, mid_path, cl_path
+            )
+        except Exception as e:
+            st.error(f"Error loading data: {e}")
+            st.stop()
+
+    # ── Date filter ──────────────────────────────────────────────────────
+    st.sidebar.markdown('<hr style="border:none; border-top:1px solid #e2e8f0; margin:14px 0;">', unsafe_allow_html=True)
+    st.sidebar.markdown('<div style="font-size:0.75rem; font-weight:700; color:#64748b; text-transform:uppercase; letter-spacing:0.08em; margin-bottom:6px;">🗓️ Date Range</div>', unsafe_allow_html=True)
+    start_date = pd.to_datetime("2026-02-01").date()
+    end_date   = pd.to_datetime("2026-03-31").date()
+    date_range = st.sidebar.date_input(
+        "date_range", value=(start_date, end_date),
+        min_value=pd.to_datetime("2026-01-01").date(),
+        max_value=pd.to_datetime("2026-12-31").date(),
+        label_visibility="collapsed"
+    )
+    if len(date_range) != 2:
+        st.warning("Please select a complete date range.")
+        st.stop()
+
+    global_start_date, global_end_date = date_range
+    global_start_datetime = pd.to_datetime(global_start_date)
+    global_end_datetime   = pd.to_datetime(global_end_date) + pd.Timedelta(days=1, microseconds=-1)
+
+    st.sidebar.markdown("""
+    <hr style="border:none; border-top:1px solid #e2e8f0; margin:14px 0;">
+    <div style="font-size:0.72rem; color:#94a3b8; padding:0 4px; line-height:1.5;">
+        Data from Taqtics Checklist Submissions<br>Feb – Mar 2026
+    </div>
+    """, unsafe_allow_html=True)
+
+    # ── Route to selected dashboard ──────────────────────────────────────
+    if "Chiller" in page:
+        render_page_header(
+            "Chiller & Freezer Temperature Log",
+            "Track temperature readings across all chiller and freezer units",
+            "🧊"
+        )
+        render_chiller_freezer(chiller_df, global_start_datetime, global_end_datetime)
+
+    elif "Hygiene" in page:
+        render_page_header(
+            "Hygiene & Supplier Replenishment",
+            "Supplier delivery compliance and chef hygiene check analysis",
+            "🧼"
+        )
+        render_hygiene_receiving(hygiene_df, receiving_df, global_start_datetime, global_end_datetime)
+
+    elif "Manager" in page:
+        render_page_header(
+            "Manager Checklists — Opening, Mid & Closing",
+            "Submission tracking and compliance across all shift types",
+            "📋"
+        )
+        render_manager_checklists(manager_df, global_start_datetime, global_end_datetime)
+
+
+if __name__ == "__main__":
+    main()
+`,
+                    "data_loader.py": `import pandas as pd
+import numpy as np
+
+def load_chiller_freezer_data(filepath):
+    """
+    Loads and shapes the Chiller and Freezer data.
+    The original CSV has 10 columns for Freezers (Temperature, Checked By)
+    and 10 columns for Chillers (Temperature, Checked By).
+    
+    We melt this wide format into a long format so we can analyze trendlines easily.
+    """
+    df = pd.read_csv(filepath)
+    
+    # Parse date flexibly to handle multiple formats
+    # E.g. "26 February 2026  08:12 PM" OR "26-02-2026 08:12"
+    df['Started At'] = pd.to_datetime(df['Started At'], dayfirst=True, errors='coerce')
+    
+    melted_rows = []
+    
+    for _, row in df.iterrows():
+        submission_id = row['Submission Id']
+        timestamp = row['Started At']
+        store = row.get('Store', 'Unknown Store')
+        manager = row.get('Submitted By', 'Unknown')
+        child_name = str(row.get('Child Name', 'Unknown')).strip()
+        
+        # Freezers
+        for i in range(1, 11):
+            temp_col = f'Temperature Freezer {i}'
+            checker_col = f'Checked By Freezer {i}'
+            
+            if temp_col in row and pd.notna(row[temp_col]) and str(row[temp_col]).strip() != '-':
+                try:
+                    # Sometimes people type strings or leave empty
+                    temp_val = float(str(row[temp_col]).strip())
+                    melted_rows.append({
+                        'Submission Id': submission_id,
+                        'Store': store,
+                        'Timestamp': timestamp,
+                        'Type': 'Freezer',
+                        'Asset Name': f'Freezer {i}',
+                        'Temperature': temp_val,
+                        'Checked By': str(row.get(checker_col, 'Unknown')).strip(),
+                        'Manager': manager,
+                        'Child Name': child_name
+                    })
+                except ValueError:
+                    pass
+        
+        # Chillers
+        for i in range(1, 11):
+            temp_col = f'Temperature Chiller {i}'
+            checker_col = f'Checked By Chiller {i}'
+            
+            if temp_col in row and pd.notna(row[temp_col]) and str(row[temp_col]).strip() != '-':
+                try:
+                    temp_val = float(str(row[temp_col]).strip())
+                    melted_rows.append({
+                        'Submission Id': submission_id,
+                        'Store': store,
+                        'Timestamp': timestamp,
+                        'Type': 'Chiller',
+                        'Asset Name': f'Chiller {i}',
+                        'Temperature': temp_val,
+                        'Checked By': str(row.get(checker_col, 'Unknown')).strip(),
+                        'Manager': manager,
+                        'Child Name': child_name
+                    })
+                except ValueError:
+                    pass
+                    
+    df_long = pd.DataFrame(melted_rows)
+    if df_long.empty:
+        df_long = pd.DataFrame(columns=['Submission Id', 'Store', 'Timestamp', 'Type', 'Asset Name', 'Temperature', 'Checked By', 'Manager', 'Child Name'])
+    return df_long
+
+
+def _parse_dynamic_cells(raw_string, num_columns):
+    """
+    Helper to parse dynamic questions that output strings like:
+    "item1,val,val,val,,,,,"
+    """
+    if pd.isna(raw_string):
+        return []
+    
+    # Split by comma but handle potential quotes (though simpler here to just split and group)
+    # The format seems to pack consecutive rows in one string: "diwas,No,No... cyrus,Yes,Yes..."
+    # Actually, the CSV shows each SUBMISSION has a single giant string with extra commas.
+    # E.g: "diwas,No,No,No,No,No,No,No,No,No,,,,,,,,,,"
+    parts = str(raw_string).split(',')
+    
+    # Remove trailing empty commas cleanly
+    valid_parts = [p.strip() for p in parts if p.strip() or p == '']
+    
+    rows = []
+    # Chunk them up
+    for i in range(0, len(valid_parts), num_columns):
+        chunk = valid_parts[i:i+num_columns]
+        if len(chunk) > 1 and any(chunk[1:]): # If there's at least one value
+             # ensure it matches num_columns by padding just in case
+             chunk += [''] * (num_columns - len(chunk))
+             if chunk[0] != '': # Must have a name/item
+                rows.append(chunk)
+
+    return rows
+
+
+def load_hygiene_data(filepath):
+    """
+    Loads hygiene checklist data. The actual checks are packed into Comment-0100001
+    Format: Name, 9 Yes/No questions.
+    """
+    df = pd.read_csv(filepath)
+    df['Started At'] = pd.to_datetime(df['Started At'], dayfirst=True, errors='coerce')
+    
+    # The columns for hygiene are 1 Name + 9 Questions = 10 cols
+    parsed_data = []
+    
+    for _, row in df.iterrows():
+        submission_id = row['Submission Id']
+        timestamp = row['Started At']
+        
+        # Auto-detect the correct column: prefer 'Personal Hygiene Checks' then fallback to 'Comment-0100001'
+        raw_str = ''
+        for col_name in ['Personal Hygiene Checks', 'Comment-0100001']:
+            if col_name in row.index and pd.notna(row[col_name]) and str(row[col_name]).strip() not in ('', '-'):
+                raw_str = row[col_name]
+                break
+        
+        chunks = _parse_dynamic_cells(raw_str, 10)
+        for chunk in chunks:
+            name = chunk[0].strip()
+            # If the chunk has actual data and is not just a trailing comma block
+            if name:
+                responses = chunk[1:10]
+                # Count 'Yes'
+                yes_count = sum(1 for r in responses if str(r).strip().lower() == 'yes')
+                no_count = sum(1 for r in responses if str(r).strip().lower() == 'no')
+                
+                parsed_data.append({
+                    'Submission Id': submission_id,
+                    'Timestamp': timestamp,
+                    'Chef Name': name,
+                    'Yes Count': yes_count,
+                    'No Count': no_count,
+                    'Total Checked': yes_count + no_count,
+                    'Compliance %': (yes_count / (yes_count + no_count) * 100) if (yes_count + no_count) > 0 else 0
+                })
+                
+    df_out = pd.DataFrame(parsed_data)
+    if df_out.empty:
+        df_out = pd.DataFrame(columns=['Submission Id', 'Timestamp', 'Chef Name', 'Yes Count', 'No Count', 'Total Checked', 'Compliance %'])
+    return df_out
+
+
+def load_receiving_log_data(filepath):
+    """
+    Parses the Receiving Log Sheet.
+    The dynamic string is inside \`Comment-0100005\`.
+    Format per item: Date(or Id), Supplier Name, Truck Temp, Truck Cond, Product Name, Product Temp, Quantity, Expiry Date, Status, Remarks, Received By.
+    That is 11 columns per chunk.
+    """
+    df = pd.read_csv(filepath)
+    df['Started At'] = pd.to_datetime(df['Started At'], dayfirst=True, errors='coerce')
+    
+    parsed_data = []
+    
+    col_count = 11
+    
+    for _, row in df.iterrows():
+        submission_id = row['Submission Id']
+        timestamp = row['Started At']
+        
+        # Auto-detect the correct column for the receiving log data
+        raw_str = ''
+        for col_name in ['Receiving Log Sheet.1', 'Comment-0100005']:
+            if col_name in row.index and pd.notna(row[col_name]) and str(row[col_name]).strip() not in ('', '-'):
+                raw_str = row[col_name]
+                break
+        chunks = _parse_dynamic_cells(raw_str, col_count)
+        
+        # Carry over supplier name if it's implicitly grouped (blank in CSV usually means same supplier)
+        current_supplier = "Unknown Supplier"
+        current_truck_temp = None
+        
+        for chunk in chunks:
+            # chunk offsets
+            # 0: Id/Date
+            # 1: Supplier
+            # 2: Truck Temp
+            # 3: Truck Cond
+            # 4: Product
+            # 5: Product Temp
+            # 6: Qty
+            # 7: Expiry
+            # 8: Status (Accepted/Rejected)
+            # 9: Remarks
+            # 10: Received By
+            
+            sup = chunk[1].strip()
+            if sup:
+                current_supplier = sup
+                try: 
+                    current_truck_temp = float(chunk[2]) if chunk[2].strip() and chunk[2] != '-' else np.nan
+                except: 
+                    current_truck_temp = np.nan
+            
+            product = chunk[4].strip()
+            if not product:
+                continue # Skip empty items
+                
+            try:
+                prod_temp = float(chunk[5]) if chunk[5].strip() and chunk[5] != '-' else np.nan
+            except:
+                prod_temp = np.nan
+                
+            qty_str = chunk[6].strip()
+            status = chunk[8].strip()
+            receiver = chunk[10].strip() if len(chunk) > 10 else 'Unknown'
+            
+            if status.lower() not in ['accepted', 'rejected']:
+                status = 'Accepted' # Default assumption if malformed
+            
+            parsed_data.append({
+                'Submission Id': submission_id,
+                'Timestamp': timestamp,
+                'Supplier': current_supplier,
+                'Truck Temp': current_truck_temp,
+                'Product': product,
+                'Product Temp': prod_temp,
+                'Quantity': qty_str,
+                'Status': status.capitalize()
+            })
+            
+    df_out = pd.DataFrame(parsed_data)
+    if df_out.empty:
+        df_out = pd.DataFrame(columns=['Submission Id', 'Timestamp', 'Supplier', 'Truck Temp', 'Product', 'Product Temp', 'Quantity', 'Status'])
+    return df_out
+
+
+def load_manager_checklists(opening_path, mid_path, closing_path):
+    """
+    Loads all 3 manager checklists and standardizes them into a single timeline DF.
+    """
+    op_df = pd.read_csv(opening_path)
+    mid_df = pd.read_csv(mid_path)
+    cl_df = pd.read_csv(closing_path)
+    
+    # Add Shift label
+    op_df['Shift'] = 'Opening'
+    mid_df['Shift'] = 'Mid-Shift'
+    cl_df['Shift'] = 'Closing'
+    
+    df_all = pd.concat([op_df, mid_df, cl_df], ignore_index=True)
+    df_all['Started At'] = pd.to_datetime(df_all['Started At'], dayfirst=True, errors='coerce')
+    
+    # We mainly need Submission Id, Started At, Shift, Compliance, Store.
+    res = df_all[['Submission Id', 'Shift', 'Started At', 'Compliance', 'Store', 'Submitted By', 'Total score']].copy()
+    
+    # To determine daily compliance drops, we need the "Date" from timestamp
+    res['Date'] = res['Started At'].dt.date
+    
+    return res
+`,
+                    "dashboards/chiller_freezer.py": `import streamlit as st
+import plotly.express as px
+import plotly.graph_objects as go
+import pandas as pd
+
+def render_chiller_freezer(df: pd.DataFrame, start_dt, end_dt):
+    st.header("🧊 Chiller & Freezer Temperature Log")
+    
+    # Filter by global dates
+    df = df[(df['Timestamp'] >= start_dt) & (df['Timestamp'] <= end_dt)].copy()
+    
+    if df.empty:
+        st.warning("No data available for the selected date range.")
+        return
+        
+    # Order the chronological 'Child Name' identifiers 
+    def parse_time_for_sort(t_str):
+        try:
+            return pd.to_datetime(t_str, format='%I:%M %p').time()
+        except:
+            return pd.to_datetime('00:00:00').time()
+            
+    unique_child_names = df['Child Name'].dropna().unique()
+    sorted_child_names = sorted(unique_child_names, key=parse_time_for_sort)
+    
+    # High-level Metrics
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Total Temperature Logs", len(df))
+    with col2:
+        avg_chiller_temp = df[df['Type'] == 'Chiller']['Temperature'].mean()
+        st.metric("Avg Chiller Temp", f"{avg_chiller_temp:.1f} °C" if pd.notna(avg_chiller_temp) else "N/A")
+    with col3:
+        avg_freezer_temp = df[df['Type'] == 'Freezer']['Temperature'].mean()
+        st.metric("Avg Freezer Temp", f"{avg_freezer_temp:.1f} °C" if pd.notna(avg_freezer_temp) else "N/A")
+        
+    st.markdown("---")
+    
+    # Heatmaps for Chillers and Freezers
+    st.subheader("Daily Shift Heatmaps")
+    st.write("Visualizing the average recorded temperature for each asset by shift.")
+    
+    h_col1, h_col2 = st.columns(2)
+    
+    with h_col1:
+        chiller_df = df[df['Type'] == 'Chiller']
+        if not chiller_df.empty:
+            agg_chiller = chiller_df.groupby(['Asset Name', 'Child Name'])['Temperature'].mean().reset_index()
+            pivot_chiller = agg_chiller.pivot(index='Child Name', columns='Asset Name', values='Temperature')
+            valid_idx = [c for c in sorted_child_names if c in pivot_chiller.index]
+            pivot_chiller = pivot_chiller.reindex(valid_idx)
+            
+            fig_c = px.imshow(pivot_chiller, text_auto=".1f", aspect="auto",
+                              color_continuous_scale="Blues", 
+                              title="Chillers Heatmap (°C)")
+            st.plotly_chart(fig_c, use_container_width=True)
+            
+    with h_col2:
+        freezer_df = df[df['Type'] == 'Freezer']
+        if not freezer_df.empty:
+            agg_freezer = freezer_df.groupby(['Asset Name', 'Child Name'])['Temperature'].mean().reset_index()
+            pivot_freezer = agg_freezer.pivot(index='Child Name', columns='Asset Name', values='Temperature')
+            valid_idx = [c for c in sorted_child_names if c in pivot_freezer.index]
+            pivot_freezer = pivot_freezer.reindex(valid_idx)
+            
+            fig_f = px.imshow(pivot_freezer, text_auto=".1f", aspect="auto",
+                              color_continuous_scale="PuBu", 
+                              title="Freezers Heatmap (°C)")
+            st.plotly_chart(fig_f, use_container_width=True)
+
+    st.markdown("---")
+    
+    # Trendlines over time
+    st.subheader("Temperature Trend Lines")
+    
+    tab1, tab2 = st.tabs(["Overall Trends", "Isolate Equipment Item"])
+    
+    with tab1:
+        st.write("Average temperature across all active equipment over time.")
+        
+        # Group by day and type
+        trend_df = df.copy()
+        trend_df['Date'] = trend_df['Timestamp'].dt.date
+        daily_trend = trend_df.groupby(['Date', 'Type'])['Temperature'].mean().reset_index()
+        
+        fig_trend = px.line(daily_trend, x='Date', y='Temperature', color='Type', markers=True,
+                            title="Daily Average Temperature Trend",
+                            color_discrete_map={'Chiller': '#2563eb', 'Freezer': '#0891b2'})
+        st.plotly_chart(fig_trend, use_container_width=True)
+        
+    with tab2:
+        st.write("Select a specific asset to view its individual trend timeline.")
+        assets = df['Asset Name'].unique()
+        selected_asset = st.selectbox("Select Asset to Isolate", assets)
+        
+        isolated_df = df[df['Asset Name'] == selected_asset].sort_values('Timestamp')
+        isolated_df['Date'] = isolated_df['Timestamp'].dt.date
+        
+        chart_type = st.radio("Chart Type", ["Heatmap", "Line Chart"], horizontal=True)
+        
+        if chart_type == "Heatmap":
+            # Heatmap 1: Date vs Child Name
+            st.write(f"**Temperature Timeline per Period ({selected_asset})**")
+            pivot_date_time = isolated_df.pivot_table(index='Child Name', columns='Date', values='Temperature', aggfunc='mean')
+            
+            # Create a parallel text pivot for hover
+            # Just take the first manager string or join unique ones per cell
+            text_pivot = isolated_df.pivot_table(index='Child Name', columns='Date', values='Checked By', aggfunc=lambda x: ', '.join(pd.Series.unique(x)))
+            
+            valid_idx = [c for c in sorted_child_names if c in pivot_date_time.index]
+            pivot_date_time = pivot_date_time.reindex(valid_idx)
+            if not text_pivot.empty:
+                text_pivot = text_pivot.reindex(valid_idx)
+                
+            fig_iso_heat = go.Figure(data=go.Heatmap(
+                z=pivot_date_time.values,
+                x=pivot_date_time.columns,
+                y=pivot_date_time.index,
+                text=text_pivot.values if not text_pivot.empty else None,
+                hovertemplate="Date: %{x}<br>Time: %{y}<br>Temp: %{z:.1f} °C<br>Checked By: %{text}<extra></extra>",
+                colorscale="Oranges",
+            ))
+            fig_iso_heat.update_layout(title=f"{selected_asset} Operations Breakdown")
+            st.plotly_chart(fig_iso_heat, use_container_width=True)
+            
+            st.markdown("---")
+            
+            # Heatmap 2: Date vs Person (Checked By)
+            st.write("**Staff Logging Matrix**")
+            pivot_person_date = isolated_df.pivot_table(index='Checked By', columns='Date', values='Temperature', aggfunc='mean')
+            fig_person_heat = px.imshow(pivot_person_date, text_auto=".1f", aspect="auto", 
+                                        color_continuous_scale="Purpor", title="Average Asset Temp Recorded by Staff Member (°C)")
+            st.plotly_chart(fig_person_heat, use_container_width=True)
+            
+        else:
+            fig_iso = px.line(isolated_df, x='Timestamp', y='Temperature', markers=True,
+                              title=f"Trendline for {selected_asset}",
+                              color_discrete_sequence=['#ea580c'])
+            st.plotly_chart(fig_iso, use_container_width=True)
+
+    st.markdown("---")
+    
+    # Completion Frequency
+    st.subheader("Completion Frequency")
+    st.write("How frequently each log is filled by the responsible staff.")
+    
+    freq_df = df.groupby(['Asset Name']).size().reset_index(name='Logs Completed').sort_values('Logs Completed', ascending=False)
+    
+    fig_bar = px.bar(freq_df, x='Asset Name', y='Logs Completed', color='Logs Completed',
+                     color_continuous_scale='Mint', title="Log Submissions per Asset")
+    st.plotly_chart(fig_bar, use_container_width=True)
+`,
+                    "dashboards/hygiene_receiving.py": `import streamlit as st
+import plotly.express as px
+import pandas as pd
+
+def render_hygiene_receiving(hygiene_df: pd.DataFrame, receiving_df: pd.DataFrame, start_dt, end_dt):
+    st.header("🧼 Hygiene & Supplier Replenishment")
+    
+    # Filter Data
+    h_df = hygiene_df[(hygiene_df['Timestamp'] >= start_dt) & (hygiene_df['Timestamp'] <= end_dt)].copy()
+    r_df = receiving_df[(receiving_df['Timestamp'] >= start_dt) & (receiving_df['Timestamp'] <= end_dt)].copy()
+    
+    tab1, tab2 = st.tabs(["Supplier Deliveries (Receiving Log)", "Chef Personal Hygiene"])
+    
+    # -----------------------------
+    # TAB 1: SUPPLIER RECEIVING LOG
+    # -----------------------------
+    with tab1:
+        if r_df.empty:
+            st.warning("No Receiving Log data available.")
+        else:
+            st.subheader("📦 Supplier Delivery Overview")
+            
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                st.metric("Total Items Received", len(r_df))
+            with c2:
+                # Count distinct suppliers
+                st.metric("Unique Suppliers", r_df['Supplier'].nunique())
+            with c3:
+                # Rejected items
+                rejected = len(r_df[r_df['Status'] == 'Rejected'])
+                st.metric("Rejected Deliveries", rejected)
+                
+            st.markdown("---")
+            
+            # Supplier Holistic View
+            st.markdown("### Supplier Frequency & Product Volume")
+            st.write("Understand how many products each supplier delivers, and how frequently.")
+            
+            # Group by supplier count to see volume
+            sup_vol = r_df.groupby('Supplier').size().reset_index(name='Products Delivered').sort_values('Products Delivered', ascending=False)
+            
+            fig_sup_vol = px.bar(sup_vol, x='Supplier', y='Products Delivered', color='Products Delivered',
+                                 title="Total Volume Delivered per Supplier", color_continuous_scale="Purpor")
+            st.plotly_chart(fig_sup_vol, use_container_width=True)
+            
+            col_s1, col_s2 = st.columns(2)
+            
+            with col_s1:
+                st.markdown("#### Delivery Frequency")
+                st.write("Unique delivery dates per supplier.")
+                # We extract date for frequency
+                r_df['Date'] = r_df['Timestamp'].dt.date
+                sup_freq = r_df.groupby('Supplier')['Date'].nunique().reset_index(name='Days Delivered').sort_values('Days Delivered', ascending=False)
+                
+                fig_freq = px.bar(sup_freq, x='Supplier', y='Days Delivered', color='Days Delivered',
+                                  color_continuous_scale="Teal")
+                st.plotly_chart(fig_freq, use_container_width=True)
+                
+            with col_s2:
+                st.markdown("#### Supplier Compliance Ratio")
+                st.write("Accepted vs Rejected item ratio per supplier.")
+                status_df = r_df.groupby(['Supplier', 'Status']).size().reset_index(name='Count')
+                fig_status = px.bar(status_df, x='Supplier', y='Count', color='Status', 
+                                    barmode='group', color_discrete_map={'Accepted': '#10b981', 'Rejected': '#ef4444'})
+                st.plotly_chart(fig_status, use_container_width=True)
+
+            st.markdown("---")
+            
+            st.markdown("### Temperature Compliance Matrix")
+            st.write("Analyze acceptable receiving standards (Truck vs Product temperature correlation).")
+            
+            # Scatter plot acting as a pseudo heatmap/matrix mapping Truck against Product temp
+            clean_temps = r_df.dropna(subset=['Truck Temp', 'Product Temp'])
+            fig_scatter = px.scatter(clean_temps, x='Truck Temp', y='Product Temp', color='Status',
+                                     hover_data=['Supplier', 'Product'], 
+                                     color_discrete_map={'Accepted': '#10b981', 'Rejected': '#ef4444'},
+                                     title="Truck Temperature vs. Product Temperature (°C)")
+            st.plotly_chart(fig_scatter, use_container_width=True)
+
+    # -----------------------------
+    # TAB 2: PERSONAL HYGIENE
+    # -----------------------------
+    with tab2:
+        if h_df.empty:
+            st.warning("No Personal Hygiene data available.")
+        else:
+            st.subheader("👨‍🍳 Chef Compliance Summary")
+            
+            h1, h2, h3 = st.columns(3)
+            with h1:
+                st.metric("Total Hygiene Logs", len(h_df))
+            with h2:
+                avg_comp = h_df['Compliance %'].mean()
+                st.metric("Average Overall Compliance", f"{avg_comp:.1f}%")
+            with h3:
+                # Anyone with < 100% is considered to have a violation
+                violations = len(h_df[h_df['Compliance %'] < 100])
+                st.metric("Logs w/ Violations", violations)
+                
+            st.markdown("---")
+            
+            st.markdown("### Compliance by Chef")
+            st.write("Grouped view to see which candidates/chefs perform well or fail compliance checks.")
+            
+            # Group by Chef
+            chef_comp = h_df.groupby('Chef Name')[['Yes Count', 'No Count']].sum().reset_index()
+            # Calculate their total hygiene failure rate
+            chef_comp['Total Checks'] = chef_comp['Yes Count'] + chef_comp['No Count']
+            chef_comp['Failure Rate %'] = (chef_comp['No Count'] / chef_comp['Total Checks']) * 100
+            
+            c_col1, c_col2 = st.columns([2, 1])
+            with c_col1:
+                fig_chef = px.bar(chef_comp.sort_values('Yes Count', ascending=False), 
+                                  x='Chef Name', y=['Yes Count', 'No Count'],
+                                  barmode='stack', title="Hygiene Check Results per Chef",
+                                  color_discrete_map={'Yes Count': '#10b981', 'No Count': '#ef4444'})
+                st.plotly_chart(fig_chef, use_container_width=True)
+                
+            with c_col2:
+                st.markdown("<br><br>", unsafe_allow_html=True)
+                st.dataframe(chef_comp[['Chef Name', 'Failure Rate %']].sort_values('Failure Rate %', ascending=False).style.format({'Failure Rate %': '{:.1f}%'}), use_container_width=True)
+`,
+                    "dashboards/manager_checklists.py": `import streamlit as st
+import plotly.express as px
+import plotly.graph_objects as go
+import pandas as pd
+
+def render_manager_checklists(df: pd.DataFrame, start_dt, end_dt):
+    st.header("📋 Manager Checklists (Opening, Mid, Closing)")
+    
+    # Filter Data
+    df = df[(df['Started At'] >= start_dt) & (df['Started At'] <= end_dt)].copy()
+    
+    if df.empty:
+        st.warning("No Manager Checklist data available.")
+        return
+        
+    st.markdown("### Submission Drop-off Tracker")
+    st.write("Tracks submission frequency drops across the day to highlight exactly where compliance falls off (e.g., Opening vs Closing).")
+    
+    # Calculate drops
+    shift_counts = df.groupby('Shift').size().reindex(['Opening', 'Mid-Shift', 'Closing']).fillna(0)
+    
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Morning Checklists (Expected: Highest)", int(shift_counts.get('Opening', 0)))
+    with col2:
+        st.metric("Mid-Shift Checklists", int(shift_counts.get('Mid-Shift', 0)))
+    with col3:
+        st.metric("Closing Checklists", int(shift_counts.get('Closing', 0)))
+        
+    st.markdown("---")
+    
+    # Funnel Chart
+    fig_funnel = go.Figure(go.Funnel(
+        y=shift_counts.index,
+        x=shift_counts.values,
+        textinfo="value+percent initial",
+        marker={"color": ["#14b8a6", "#f59e0b", "#ef4444"]}
+    ))
+    fig_funnel.update_layout(title="Submission Funnel (Opening ➔ Mid ➔ Closing)")
+    st.plotly_chart(fig_funnel, use_container_width=True)
+    
+    st.markdown("---")
+    
+    st.markdown("### Drill-Down Details")
+    st.write("Explore low-level details of submissions to identify specific managers or dates where compliance was missed.")
+    
+    # Make a pivot table showing Dates vs Shifts
+    pivot_df = df.pivot_table(index='Date', columns='Shift', values='Submission Id', aggfunc='count', fill_value=0)
+    # Reindex columns
+    expected_cols = ['Opening', 'Mid-Shift', 'Closing']
+    for c in expected_cols:
+        if c not in pivot_df.columns:
+            pivot_df[c] = 0
+            
+    pivot_df = pivot_df[expected_cols].sort_index(ascending=False)
+    
+    col_d1, col_d2 = st.columns([2, 1])
+    
+    with col_d1:
+        st.write("#### Daily Compliance Matrix")
+        # style mapping: >0 green, 0 red
+        def highlight_missed(val):
+            color = 'rgba(239, 68, 68, 0.3)' if val == 0 else 'rgba(16, 185, 129, 0.2)'
+            return f'background-color: {color}'
+            
+        st.dataframe(pivot_df.style.applymap(highlight_missed), use_container_width=True)
+        
+    with col_d2:
+        st.write("#### Submitted By (Manager Volume)")
+        mgr_vol = df.groupby('Submitted By').size().reset_index(name='Total Submissions').sort_values('Total Submissions', ascending=False)
+        st.dataframe(mgr_vol, use_container_width=True, hide_index=True)
+        
+    st.markdown("---")
+    st.markdown("### Daily Trend Line")
+    
+    daily_shifts = df.groupby(['Date', 'Shift']).size().reset_index(name='Count')
+    fig_line = px.line(daily_shifts, x='Date', y='Count', color='Shift', markers=True, 
+                       title="Checklists Submitted Over Time",
+                       category_orders={'Shift': ['Opening', 'Mid-Shift', 'Closing']})
+    st.plotly_chart(fig_line, use_container_width=True)
+`,
+                }
+            },
+            document.getElementById("root")
+        );
+    </script>
+</body>
+</html>
